@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Quishing Detector - Live Scanner</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: #f9f9f9; padding: 1.5rem; border-radius: 8px; margin-top: 1rem; border: 1px solid #ddd; word-break: break-all; }
+    .SAFE { color: green; font-weight: bold; }
+    .SUSPICIOUS { color: orange; font-weight: bold; }
+    .MALICIOUS { color: red; font-weight: bold; }
+    input[type="file"] { padding: 10px; border: 1px dashed #666; width: 100%; border-radius: 6px; box-sizing: border-box; }
+    video { width: 100%; border-radius: 8px; border: 2px solid #ccc; background: #000; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+
+  <h2>QR Code Phishing Scanner</h2>
+  
+  <!-- Live Camera Feed Section -->
+  <p><strong>Live Camera View:</strong></p>
+  <video id="webcam" autoplay playsinline></video>
+  <canvas id="frameCanvas" style="display:none;"></canvas>
+
+  <hr style="margin: 1.5rem 0;">
+
+  <!-- Manual Upload Section -->
+  <p><strong>Or Upload QR Code Image File:</strong></p>
+  <input type="file" id="fileInput" accept="image/*">
+
+  <!-- Scan Status & Results -->
+  <div id="loading" style="display:none; margin-top: 1rem; color: #555;">
+    <em>Analyzing URL security and redirect chain...</em>
+  </div>
+
+  <div id="results" class="card" style="display:none;">
+    <h3>Analysis Verdict: <span id="verdict"></span></h3>
+    <p><strong>Risk Score:</strong> <span id="score"></span>/100</p>
+    <p><strong>Raw Payload:</strong> <span id="rawPayload"></span></p>
+    <p><strong>Final Target URL:</strong> <span id="targetUrl"></span></p>
+    <h4>Flags Identified:</h4>
+    <ul id="flagsList"></ul>
+  </div>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('frameCanvas');
+    let isProcessing = false;
+
+    // 1. Initialize Webcam Stream
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+      .then(stream => { video.srcObject = stream; })
+      .catch(err => console.warn("Webcam access unavailable or blocked: ", err));
+
+    // 2. Loop: Capture & Scan Camera Frame Every 1 Second
+    setInterval(() => {
+      if (isProcessing || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        isProcessing = true;
+
+        const formData = new FormData();
+        formData.append("file", blob, "live_frame.jpg");
+
+        try {
+          const response = await fetch("http://127.0.0.1:8000/api/scan", {
+            method: "POST",
+            body: formData
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            displayResults(data);
+          }
+        } catch (err) {
+          // Silent catch for background camera stream polling
+        } finally {
+          isProcessing = false;
+        }
+      }, 'image/jpeg');
+    }, 1000);
+
+    // 3. Manual File Upload Event Listener
+    document.getElementById('fileInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const loadingEl = document.getElementById("loading");
+      loadingEl.style.display = "block";
+      document.getElementById("results").style.display = "none";
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const response = await fetch("http://127.0.0.1:8000/api/scan", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await response.json();
+        loadingEl.style.display = "none";
+
+        if (response.ok) {
+          displayResults(data);
+        } else {
+          alert("Error: " + (data.detail || "Failed to analyze image"));
+        }
+      } catch (err) {
+        loadingEl.style.display = "none";
+        alert("Cannot connect to FastAPI server. Make sure Uvicorn is running!");
+      }
+    });
+
+    // 4. Render Analysis Results UI
+    function displayResults(data) {
+      document.getElementById("results").style.display = "block";
+      
+      const verdictEl = document.getElementById("verdict");
+      verdictEl.innerText = data.verdict;
+      verdictEl.className = data.verdict;
+
+      document.getElementById("score").innerText = data.risk_score;
+      document.getElementById("rawPayload").innerText = data.raw_payload;
+      document.getElementById("targetUrl").innerText = data.final_url;
+
+      const flagsList = document.getElementById("flagsList");
+      flagsList.innerHTML = "";
+      if (!data.flags || data.flags.length === 0) {
+        flagsList.innerHTML = "<li>No threat indicators detected. Safe to open.</li>";
+      } else {
+        data.flags.forEach(flag => {
+          const li = document.createElement("li");
+          li.innerText = flag;
+          flagsList.appendChild(li);
+        });
+      }
+    }
+  </script>
+</body>
+</html>
